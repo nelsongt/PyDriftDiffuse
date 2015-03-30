@@ -31,7 +31,6 @@ n_type_width = 2E-06 # m
 grid_pnts = 200 # must be an even number for now
 
 
-
 ## Construct constant FDM matrix ##
 diag = np.zeros(grid_pnts-2) - 2
 udiag = np.zeros(grid_pnts-3) + 1
@@ -52,6 +51,7 @@ def meter_to_eV(distance):
 def pnts_in_type(width,grid_distance):
   return int(width / grid_distance) + 1
 
+
 ## Material Calculations ##
 V_bi_p = one_sided_Vbi(-N_a)
 V_bi_n = one_sided_Vbi(N_d)
@@ -68,27 +68,24 @@ del_x_2 = del_x ** 2
 pnts_in_p = pnts_in_type(meter_to_eV(p_type_width),del_x)
 pnts_in_n = pnts_in_type(meter_to_eV(n_type_width),del_x)
 
-print pnts_in_n
-print pnts_in_p
 
+## Functions that use material calculations ##
+def carrier_conc_from_phi(Phi): # pass negative phi for p-type material
+  return n_i_eV * math.exp(q*Phi/(k_B*T))
 
-## The big function ##
-def big_func(Phi):
+def big_func(Phi): # The big linear algebra setup function #
 
-  rhs = np.zeros(grid_pnts-2) # only interior grid points needed here
+  rhs = np.zeros(pnts_in_p + pnts_in_p - 2) # only interior grid points needed here
 
   # Take note of junction polarity and assign charge densities for each grid point
-  halfway = int(rhs.size/2)
-  for i in xrange(halfway):
-    n_eV = n_i_eV * math.exp(q*Phi[i]/(k_B*T))
-    p_eV = n_i_eV * math.exp(-q*Phi[i]/(k_B*T))
-    rho_p = -q * (p_eV - n_eV - N_a_eV) # charge density in p-type
-    rhs[i] = del_x_2 * rho_p / (e_r*e_0) # setup rhs for p-type
-  for i in xrange(halfway):
-    n_eV = n_i_eV * math.exp(q*Phi[i+halfway]/(k_B*T))
-    p_eV = n_i_eV * math.exp(-q*Phi[i+halfway]/(k_B*T))
-    rho_n = -q * (p_eV - n_eV + N_d_eV) # charge density in n-type
-    rhs[i+halfway] = del_x_2 * rho_n / (e_r*e_0) # setup rhs for n-type
+  for i in xrange(rhs.size):
+    n_eV = carrier_conc_from_phi(Phi[i])
+    p_eV = carrier_conc_from_phi(-Phi[i])
+    if i < (pnts_in_p):
+      rho = -q * (p_eV - n_eV - N_a_eV) # charge density in p-type
+    else:
+      rho = -q * (p_eV - n_eV + N_d_eV) # charge density in n-type
+    rhs[i] = del_x_2 * rho / (e_r*e_0) # setup rhs for p-type
 
   # Incorporate boundary conditions
   rhs[0] = rhs[0] - V_bi_p # add potential at p-type depletion-neutral region iface 
@@ -103,12 +100,12 @@ def big_func(Phi):
 #### MAIN ####
 
 # Build guess vector
-phi_guess = np.zeros(grid_pnts - 2)
-halfway = int(phi_guess.size/2)
-for i in xrange(halfway):
-  phi_guess[i] = V_bi_p
-for i in xrange(halfway):
-  phi_guess[i+halfway] = V_bi_n
+phi_guess = np.zeros(pnts_in_p + pnts_in_n - 2)
+for i in xrange(phi_guess.size):
+  if i < (pnts_in_p-1):
+    phi_guess[i] = V_bi_p # charge density in p-type
+  else:
+    phi_guess[i] = V_bi_n # charge density in n-type
 
 potentials = np.zeros(grid_pnts) # Create an array of potentials, one for each grid point
 
@@ -119,7 +116,7 @@ potentials[potentials.size-1] = V_bi_n
 
 
 # Setup plot #
-distances = np.linspace(0,cell_width*1E6*meter_eV_factor,num=grid_pnts)
+distances = np.linspace(0,cell_width_eV*1E6*meter_eV_factor,num=grid_pnts)
 
 plt.plot(distances, potentials, '-', c = 'b')
 plt.xlabel(r'Distance ($\mu$m)')
