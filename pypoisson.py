@@ -98,12 +98,12 @@ def Bernoulli(x):
   return B
 
 
-def carrier_conc_from_continuity(Phi)
+def carrier_conc_from_continuity(Phi,Diff)
   for i in xrange(Phi.size):
-    diag2[i] = 2
+    diag2[i] = -(Diff[i+1] * Bernoulli((Phi[i] - Phi[i+1])/(k_B*T)) + Diff[i] * Bernoulli((Phi[i] - Phi[i-1])/(k_B*T))) / del_x_2
   for i in xrange(Phi.size-1):
-    udiag2[i] = D_n * Bernoulli((Phi[i+1] - Phi[i])/(k_B*T)) / del_x_2
-    ldiag2[i] = D_n * Bernoulli((Phi[i+1] - Phi[i])/(k_B*T)) / del_x_2
+    udiag2[i] = Diff[i+1] * Bernoulli(-(Phi[i] - Phi[i+1])/(k_B*T)) / del_x_2
+    ldiag2[i] = Diff * Bernoulli((Phi[i+1] - Phi[i])/(k_B*T)) / del_x_2
   fdm_mat = sparse.diags([diag2, udiag2, ldiag2], [0, 1, -1], shape=(Phi.size, Phi.size), format="csc")
 
 
