@@ -97,15 +97,32 @@ def Bernoulli(x):
   B[idxs2] = x[idxs2] / np.expm1( x[idxs2] )
   return B
 
+def conc_factor(Diff,Phi1,Phi2):
+  return Diff * Bernoulli((Phi1 - Phi2)/(k_B*T))
 
 def carrier_conc_from_continuity(Phi,Diff)
-  for i in xrange(Phi.size):
-    diag2[i] = -(Diff[i+1] * Bernoulli((Phi[i] - Phi[i+1])/(k_B*T)) + Diff[i] * Bernoulli((Phi[i] - Phi[i-1])/(k_B*T))) / del_x_2
-  for i in xrange(Phi.size-1):
-    udiag2[i] = Diff[i+1] * Bernoulli(-(Phi[i] - Phi[i+1])/(k_B*T)) / del_x_2
-    ldiag2[i] = Diff * Bernoulli((Phi[i+1] - Phi[i])/(k_B*T)) / del_x_2
-  fdm_mat = sparse.diags([diag2, udiag2, ldiag2], [0, 1, -1], shape=(Phi.size, Phi.size), format="csc")
-
+  n_or_p = np.zeros(Phi.size)
+  
+  # For now set Generation = 0 and Recombination = 0
+  rhs = np.zeros(Phi.size-2)
+  
+  for i in xrange(1,Phi.size-1):
+    diag2[i] = -(conc_factor(Diff[i+1],Phi[i],Phi[i+1]) + conc_factor(Diff[i],Phi[i],Phi[i-1]))
+  for i in xrange(1,Phi.size-2):
+    udiag2[i] = conc_factor(Diff[i+1],Phi[i+1],Phi[i])
+    ldiag2[i] = conc_factor(Diff[i],Phi[i-1],Phi[i])
+  conc_mat = sparse.diags([diag2, udiag2, ldiag2], [0, 1, -1], shape=(Phi.size-2, Phi.size-2), format="csc")
+  
+  # Incorporate boundary conditions
+  n_or_p[0] = sqrt((N_d_eV - N_a_eV)**2 + 4 * n_i_eV**2)/2 + (N_d_eV - N_a_eV)/2 
+  n_or_p[n_or_p.size-1] = sqrt((N_d_eV - N_a_eV)**2 + 4 * n_i_eV**2)/2 + (N_d_eV - N_a_eV)/2
+  rhs[0] = conc_factor(Diff[i],Phi[i-1],Phi[i]) * n_or_p[0] 
+  rhs[rhs.size-1] = conc_factor(Diff[i+1],Phi[i+1],Phi[i]) * n_or_p[n_or_p.size-1]
+  
+  
+  # Solve for carrier concentrations using linear solver
+  n_or_p[1:n_or_p.size-1:1] = sparse.linalg.spsolve(conc_mat,rhs)
+  return n_or_p
 
 def big_func(Phi,n,p): # The big linear algebra setup function 
 
@@ -145,8 +162,9 @@ potentials = np.zeros(grid_pnts) # Create an array of potentials, one for each g
 potentials[0] = V_bi_p # insert known boundary potentials
 potentials[potentials.size-1] = V_bi_n
 
-for i in xrange(2):
-  potentials[1:potentials.size-1:1] = optimize.newton_krylov(big_func,phi_guess,verbose=1,iter=10) # Trick because numpy can't append arrays without copying them
+potentials[1:potentials.size-1:1] = phi_guess
+
+potentials[1:potentials.size-1:1] = optimize.newton_krylov(big_func,phi_guess,verbose=1,iter=10) # Trick because numpy can't append arrays without copying them
 
 
 
