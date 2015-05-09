@@ -40,6 +40,7 @@ R = 0
 
 V_applied = 0
 
+
 ## Mode Settings ## 
 grid_pnts = 200 # must be an even number for now
 
@@ -158,9 +159,11 @@ def carrier_conc_from_continuity(Phi,Diff,type,polarity):  # Phi has total grid 
     #print i
     #print diag_construct[i-1]
     #print Phi[i]
+    rhs[i-1] = (R - G)*del_x_2
   for i in xrange(1,Phi.size-2):
     udiag_construct[i-1] = conc_factor(Diff[i+1],Phi[i+1],Phi[i],type)
     ldiag_construct[i-1] = conc_factor(Diff[i+1],Phi[i],Phi[i+1],type)  # This diagonal actually starts on line 2, so values are plussed 1
+    
 
   
   conc_mat = sparse.diags([diag_construct, udiag_construct, ldiag_construct], [0, 1, -1], shape=(Phi.size-2, Phi.size-2), format="csc")
@@ -185,8 +188,8 @@ def carrier_conc_from_continuity(Phi,Diff,type,polarity):  # Phi has total grid 
     n_or_p[0] = n0
     n_or_p[n_or_p.size-1] = nF
     
-  rhs[0] = -conc_factor(Diff[1],Phi[1],Phi[0],type) * n_or_p[0] 
-  rhs[rhs.size-1] = -conc_factor(Diff[n_or_p.size-1],Phi[n_or_p.size-2],Phi[n_or_p.size-1],type) * n_or_p[n_or_p.size-1]
+  rhs[0] = rhs[0] - conc_factor(Diff[1],Phi[1],Phi[0],type) * n_or_p[0] 
+  rhs[rhs.size-1] = rhs[rhs.size-1] - conc_factor(Diff[n_or_p.size-1],Phi[n_or_p.size-2],Phi[n_or_p.size-1],type) * n_or_p[n_or_p.size-1]
   
   
   # Solve for carrier concentrations using linear solver
@@ -285,6 +288,9 @@ potentials[1:potentials.size-1:1] = optimize.newton_krylov(big_func2,potentials[
 
 p_conc = carrier_conc_from_continuity(potentials,diffusivity,1,1)
 n_conc = carrier_conc_from_continuity(potentials,diffusivity,0,1)
+
+current = diffusivity[diffusivity.size-1] * (Bernoulli((potentials[potentials.size-2] - potentials[potentials.size-1])/(k_B*T)) * p_conc[p_conc.size-2] - Bernoulli((potentials[potentials.size-1] - potentials[potentials.size-2])/(k_B*T)) * p_conc[p_conc.size-1]) / del_x
+print current
 
 # Setup plot #
 distances = np.linspace(0,cell_width_eV*1E6*meter_eV_factor,num=grid_pnts)
