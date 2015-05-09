@@ -10,6 +10,7 @@ from scipy.sparse import linalg
 
 
 ## Constants ##
+T = 300 # K
 q = 1 # e
 e_0 = 10.91 # e^2/chbar # vacuum permittivity
 k_B = 8.6173324E-05 # eV/K
@@ -18,21 +19,26 @@ time_eV_factor = 6.5821E-16 # s*eV/hbar
 
 
 ## Material Constants ##
-T = 300 # K
 e_r = 12.9 # GaAs relative permittivity
 E_g = 1.424 # eV # Bandgap
 chi = 4.07 # eV # GaAs electron affinity
-E_c = 4.7E+23 # 1/m^3 # GaAs effective conduction band density of states
-E_v = 9.0E+24 # 1/m^3 # GaAs effective valence band density of states
+
+N_c = 4.7E+23 # 1/m^3 # GaAs effective conduction band density of states
+N_v = 9.0E+24 # 1/m^3 # GaAs effective valence band density of states
 N_a = 1.0E+22 # 1/m^3 # doping in p-type
 N_d = 1.0E+22 # 1/m^3 # doping in n-type
 n_i = 2.498E+12 # 1/m^3
+
 mu_n = 0.85 # m^2/V-s
 mu_p = 0.85#0.04 # m^2/V-s
 
 p_type_width = 2E-06 # m
 n_type_width = 2E-06 # m
 
+G = 0
+R = 0
+
+V_applied = 0
 
 ## Mode Settings ## 
 grid_pnts = 200 # must be an even number for now
@@ -98,13 +104,21 @@ pnts_in_n = pnts_in_type(meter_to_eV(n_type_width),del_x)
 n_conc = np.zeros(grid_pnts)
 p_conc = np.zeros(grid_pnts)
 
-E_i = 0.5 * (E_g + k_B*T*ln(N_c/N_v))
+E_i = 0.5 * (E_g + k_B*T*math.log(N_c/N_v))
 
 ## Functions that use material calculations ##
-def carrier_conc_from_phi(Phi,type): # pass negative phi for p-type material
-  
-  
+def carrier_conc_from_phi(Phi): # pass negative phi for p-type material
   return n_i_eV * math.exp(q*Phi/(k_B*T))
+
+def carrier_conc_from_phi2(Phi,n_or_p,type): # pass negative phi for p-type material
+  mod = type_modifier(type)
+  #phi_p_n = E_i + chi + Phi - mod*(k_B*T/q)*math.log(n_or_p/n_i_eV)
+  phi_p_n = Phi - mod*(k_B*T/q)*math.log(n_or_p/n_i_eV)
+  #print phi_p_n
+  #print E_i
+  #print Phi
+  #print mod*(k_B*T/q)*math.log(n_or_p/n_i_eV)
+  return n_i_eV * math.exp(q*mod*(Phi - phi_p_n)/(k_B*T))
   
 
 def ohmic_carrier_conc(type):  
@@ -186,8 +200,8 @@ def big_func(Phi): # The big linear algebra setup function, phi has (grid points
 
   # Take note of junction polarity and assign charge densities for each grid point
   for i in xrange(rhs.size):
-    n_eV = carrier_conc_from_phi(Phi[i])
     p_eV = carrier_conc_from_phi(-Phi[i])
+    n_eV = carrier_conc_from_phi(Phi[i])
     if i < (pnts_in_p-1):
       rho = -q * (p_eV - n_eV - N_a_eV) # charge density in p-type
     else:
@@ -197,6 +211,42 @@ def big_func(Phi): # The big linear algebra setup function, phi has (grid points
 
   # Incorporate boundary conditions
   rhs[0] = rhs[0] - V_bi_p # add potential at p-type depletion-neutral region iface 
+  rhs[rhs.size-1] = rhs[rhs.size-1] - V_bi_n # add potential at n-type depletion-neutral region iface 
+
+  
+  return fdm_mat * Phi - rhs
+
+def big_func2(Phi): # The big linear algebra setup function, phi has (grid points - 2)
+
+  rhs = np.zeros(Phi.size) # only interior grid points needed here
+  
+  newPot = np.zeros(Phi.size+2)
+  newPot[1:newPot.size-1:1] = Phi
+  newPot[0] = V_bi_p + V_applied
+  newPot[newPot.size-1] = V_bi_n
+  
+  p_conc = carrier_conc_from_continuity(newPot,diffusivity,1,1)
+  n_conc = carrier_conc_from_continuity(newPot,diffusivity,0,1)
+
+  # Take note of junction polarity and assign charge densities for each grid point
+  for i in xrange(rhs.size):
+    #p_eV = carrier_conc_from_phi(-Phi[i])
+    #n_eV = carrier_conc_from_phi(Phi[i])
+    #print p_eV
+    #print n_eV
+    #p_eV = carrier_conc_from_phi2(Phi[i],p_conc[i+1],1)
+    #n_eV = carrier_conc_from_phi2(Phi[i],n_conc[i+1],0)
+    #print p_eV
+    #print n_eV
+    if i < (pnts_in_p-1):
+      rho = -q * (p_conc[i+1] - n_conc[i+1] - N_a_eV) # charge density in p-type
+    else:
+      rho = -q * (p_conc[i+1] - n_conc[i+1] + N_d_eV) # charge density in n-type
+
+    rhs[i] = del_x_2 * rho / (e_r*e_0) # setup rhs for p-type
+
+  # Incorporate boundary conditions
+  rhs[0] = rhs[0] - V_bi_p - V_applied# add potential at p-type depletion-neutral region iface
   rhs[rhs.size-1] = rhs[rhs.size-1] - V_bi_n # add potential at n-type depletion-neutral region iface 
 
   
@@ -226,19 +276,15 @@ diffusivity[diffusivity.size-1] = D_n
 potentials = np.zeros(grid_pnts) # Create an array of potentials, one for each grid point
 
 
-potentials[0] = V_bi_p # insert known boundary potentials
+potentials[0] = V_bi_p + V_applied # insert known boundary potentials
 potentials[potentials.size-1] = V_bi_n
 
 potentials[1:potentials.size-1:1] = phi_guess
 
-for i in xrange(2):
-  p_conc = carrier_conc_from_continuity(potentials,diffusivity,1,1)
-  n_conc = carrier_conc_from_continuity(potentials,diffusivity,0,1)
+potentials[1:potentials.size-1:1] = optimize.newton_krylov(big_func2,potentials[1:potentials.size-1:1],verbose=1,iter=10) # Trick because numpy can't append arrays without copying them
 
-  potentials[1:potentials.size-1:1] = optimize.newton_krylov(big_func,phi_guess,verbose=1,iter=15) # Trick because numpy can't append arrays without copying them
-
-
-
+p_conc = carrier_conc_from_continuity(potentials,diffusivity,1,1)
+n_conc = carrier_conc_from_continuity(potentials,diffusivity,0,1)
 
 # Setup plot #
 distances = np.linspace(0,cell_width_eV*1E6*meter_eV_factor,num=grid_pnts)
