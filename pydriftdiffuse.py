@@ -6,14 +6,19 @@ import scipy.constants as sc
 import matplotlib.pyplot as plt
 from scipy import sparse
 from scipy import optimize
+from scipy import integrate
 from scipy.sparse import linalg
 
 
 ## Constants ##
-T = 300 # K
+T = 300 # K # Temp of cell
+T_s = 5760 # K # Temp of black-body sun
 q = 1 # e
 e_0 = 10.91 # e^2/chbar # vacuum permittivity
 k_B = 8.6173324E-05 # eV/K
+h_eV = 2*math.pi # hbar
+c_eV = 1 # c
+subtend_angle_degrees = 0.26 # degrees
 meter_eV_factor = 1.9733E-07 # m*eV/chbar
 time_eV_factor = 6.5821E-16 # s*eV/hbar
 
@@ -38,11 +43,12 @@ n_type_width = 2E-06 # m
 G = 0
 R = 0
 
-V_applied = 0
+V_applied = 0.938 # V # Applied bias
 
 
 ## Mode Settings ## 
-grid_pnts = 200 # must be an even number for now
+grid_pnts = 400 # must be an even number for now
+suns_factor = 1 # suns
 
 
 ## Construct constant FDM matrix ##
@@ -78,17 +84,23 @@ def diffusion_coeff(mobility_eV):
 def pnts_in_type(width,grid_distance):
   return int(width / grid_distance) + 1
 
+def bose_einstein(E,T,qV):
+  return 1 / (math.exp((E-qV)/(k_B*T)) - 1)
+
+def planck_rad_func(E,T,qV):
+  return E**3 * bose_einstein(E,T,qV)
+
 
 ## Material Calculations ##
 V_bi_p = one_sided_Vbi(N_a,1)
 V_bi_n = one_sided_Vbi(N_d,0)
 
 N_a_eV = meter_conc_to_eV_conc(N_a) # using units in relation to eV to keep values close to 1
-N_d_eV = meter_conc_to_eV_conc(N_d) # could use any arbitrary units but this is good
+N_d_eV = meter_conc_to_eV_conc(N_d) # could use some arbitrary units but this is good
 n_i_eV = meter_conc_to_eV_conc(n_i)
 
 
-mu_p_eV = mobility_to_eV(mu_p)
+mu_p_eV = mobility_to_eV(mu_p) # 
 mu_n_eV = mobility_to_eV(mu_n)
 
 D_p = diffusion_coeff(mu_p_eV)
@@ -106,6 +118,17 @@ n_conc = np.zeros(grid_pnts)
 p_conc = np.zeros(grid_pnts)
 
 E_i = 0.5 * (E_g + k_B*T*math.log(N_c/N_v))
+
+flux_const = 2 / (h_eV**3 * c_eV**2)
+
+sun_geo_factor = math.pi * math.sin(math.radians(subtend_angle_degrees)) ** 2
+
+## Integrate to find the power from the sun ##
+I_0, I_err = integrate.quad(planck_rad_func,E_g,10,args=(T_s,0)) # Integrate the planck radiation function from 0 eV to 10 eV (~inf)
+I_0 = I_0 * flux_const * sun_geo_factor * suns_factor
+
+G = I_0 # Units should be W/m^2 equivalent
+
 
 ## Functions that use material calculations ##
 def carrier_conc_from_phi(Phi): # pass negative phi for p-type material
@@ -255,7 +278,13 @@ def big_func2(Phi): # The big linear algebra setup function, phi has (grid point
   
   return fdm_mat * Phi - rhs
 
+def calc_current(polarity):  # returns in units of mA/cm^2
+  J = diffusivity[diffusivity.size-1] * (Bernoulli((potentials[potentials.size-2] - potentials[potentials.size-1])/(k_B*T)) * n_conc[p_conc.size-2] - Bernoulli((potentials[potentials.size-1] - potentials[potentials.size-2])/(k_B*T)) * n_conc[p_conc.size-1]) / del_x
+  return J * sc.e / (time_eV_factor * meter_eV_factor * meter_eV_factor * 10)
+
+
 ## End Functions ##
+ 
  
  
 #### MAIN ####
@@ -263,35 +292,42 @@ def big_func2(Phi): # The big linear algebra setup function, phi has (grid point
 # Build guess vectors
 phi_guess = np.zeros(grid_pnts - 2)
 diffusivity = np.zeros(grid_pnts)
-
-
-for i in xrange(phi_guess.size):
-  if i < (pnts_in_p-1):
-    phi_guess[i] = V_bi_p # charge density in p-type
-    diffusivity[i+1] = D_p
-  else:
-    phi_guess[i] = V_bi_n # charge density in n-type
-    diffusivity[i+1] = D_n
-diffusivity[0] = D_p
-diffusivity[diffusivity.size-1] = D_n
-
-
 potentials = np.zeros(grid_pnts) # Create an array of potentials, one for each grid point
 
+voltages =  np.linspace(0.0,1.0,21)
+currents = list()
+for V_applied in voltages:
 
-potentials[0] = V_bi_p + V_applied # insert known boundary potentials
-potentials[potentials.size-1] = V_bi_n
+  for i in xrange(phi_guess.size):
+    if i < (pnts_in_p-1):
+      phi_guess[i] = V_bi_p + V_applied # charge density in p-type
+      diffusivity[i+1] = D_p
+    else:
+      phi_guess[i] = V_bi_n # charge density in n-type
+      diffusivity[i+1] = D_n
+  diffusivity[0] = D_p
+  diffusivity[diffusivity.size-1] = D_n
 
-potentials[1:potentials.size-1:1] = phi_guess
 
-potentials[1:potentials.size-1:1] = optimize.newton_krylov(big_func2,potentials[1:potentials.size-1:1],verbose=1,iter=10) # Trick because numpy can't append arrays without copying them
 
-p_conc = carrier_conc_from_continuity(potentials,diffusivity,1,1)
-n_conc = carrier_conc_from_continuity(potentials,diffusivity,0,1)
+  potentials[0] = V_bi_p + V_applied # insert known boundary potentials
+  potentials[potentials.size-1] = V_bi_n
 
-current = diffusivity[diffusivity.size-1] * (Bernoulli((potentials[potentials.size-2] - potentials[potentials.size-1])/(k_B*T)) * p_conc[p_conc.size-2] - Bernoulli((potentials[potentials.size-1] - potentials[potentials.size-2])/(k_B*T)) * p_conc[p_conc.size-1]) / del_x
-print current
+  potentials[1:potentials.size-1:1] = phi_guess
 
+  potentials[1:potentials.size-1:1] = optimize.newton_krylov(big_func2,potentials[1:potentials.size-1:1],verbose=1,iter=10) # Trick because numpy can't append arrays without copying them
+
+  p_conc = carrier_conc_from_continuity(potentials,diffusivity,1,1)
+  n_conc = carrier_conc_from_continuity(potentials,diffusivity,0,1)
+
+  currents.append(calc_current(1))
+  print V_applied
+  #print current
+
+npcurrents = np.asarray(currents)
+print currents
+print npcurrents
+print voltages
 # Setup plot #
 distances = np.linspace(0,cell_width_eV*1E6*meter_eV_factor,num=grid_pnts)
 
@@ -305,4 +341,9 @@ plt.plot(distances, p_conc, '-', c = 'b')
 plt.xlabel(r'Distance ($\mu$m)')
 plt.ylabel('Concentration (density)')
 plt.yscale('log')
+plt.show()
+
+plt.plot(voltages, npcurrents, '-', c = 'r')
+plt.xlabel('Voltage (V)')
+plt.ylabel(r'Current Density (mA/cm$^2$)')
 plt.show()
