@@ -44,11 +44,11 @@ rad_coeff = 7.2E-16 # m^3/s
 p_type_width = 2E-07 # m
 n_type_width = 2E-06 # m
 
-abs_coeff = 15000 # 1/cm
+abs_coeff = 15000 # 1/cm  # TODO: wavelength-dependent absorption coefficient
 
 
 ## Mode Settings ## 
-grid_pnts = 400 # must be an even number for now
+grid_pnts = 600 # must be an even number for now
 suns_factor = 1 # suns
 
 
@@ -140,17 +140,17 @@ sun_geo_factor = math.pi * math.sin(math.radians(subtend_angle_degrees)) ** 2
 
 
 ## Functions that use material calculations ##
-def nonrad_recom(n,p):
+def nonrad_recom(n,p): # TODO: This should be units of source/sink, not flux, check this
   return (n*p - (n_i_eV**2))/(tao_p_eV*(n+n_i_eV) + tao_n_eV*(p+n_i_eV))
 
-def rad_recom(n,p):
+def rad_recom(n,p): # TODO: This should be units of source/sink, not flux, check this
   return rad_coeff_eV * (n*p - (n_i_eV**2))
 
 
-def carrier_conc_from_phi(Phi): # pass negative phi for p-type material
+def carrier_conc_from_phi(Phi): # pass negative phi for p-type material  NOTE: This is for n and p concentration in the equilibrium case 
   return n_i_eV * math.exp(q*Phi/(k_B*T))
 
-def carrier_conc_from_phi2(Phi,n_or_p,type): # pass negative phi for p-type material
+def carrier_conc_from_phi2(Phi,n_or_p,type): # pass negative phi for p-type material  NOTE: This is for n and p conc using quasi-fermi levels TODO: This is a stub. It should be one of the available backends to get n and p
   mod = type_modifier(type)
   #phi_p_n = E_i + chi + Phi - mod*(k_B*T/q)*math.log(n_or_p/n_i_eV)
   phi_p_n = Phi - mod*(k_B*T/q)*math.log(n_or_p/n_i_eV)
@@ -158,7 +158,7 @@ def carrier_conc_from_phi2(Phi,n_or_p,type): # pass negative phi for p-type mate
   #print E_i
   #print Phi
   #print mod*(k_B*T/q)*math.log(n_or_p/n_i_eV)
-  return n_i_eV * math.exp(q*mod*(Phi - phi_p_n)/(k_B*T))
+  return n_i_eV * math.exp(q*mod*(Phi - phi_p_n)/(k_B*T))  
   
 
 def ohmic_carrier_conc(type):  
@@ -179,7 +179,7 @@ def Bernoulli(x):
     return x / np.expm1(x)
 
 
-def conc_factor(Diff,Phi1,Phi2,type):  #TODO: diffusion matrix not implemented yet
+def conc_factor(Diff,Phi1,Phi2,type): # TODO: diffusion matrix not implemented yet
   mod = type_modifier(type)
   if type:
     return D_p*Bernoulli(mod*(Phi1 - Phi2)/(k_B*T))
@@ -188,7 +188,7 @@ def conc_factor(Diff,Phi1,Phi2,type):  #TODO: diffusion matrix not implemented y
   #return Diff*Bernoulli(mod*(Phi1 - Phi2)/(k_B*T))
 
 
-def carrier_conc_from_continuity(Phi,Diff,type,polarity):  # Phi has total grid points, polarity is 1 for p-type at 0, 0 for n-type at 0 ... typedef?
+def carrier_conc_from_continuity(Phi,Diff,type,polarity):  # Phi has total grid points, polarity is 1 for p-type at 0, 0 for n-type at 0 ... TODO: typedef polarity? TODO: 
   n_or_p = np.zeros(Phi.size)
   diag_construct = np.zeros(Phi.size-2)
   udiag_construct = np.zeros(Phi.size-3)
@@ -200,7 +200,7 @@ def carrier_conc_from_continuity(Phi,Diff,type,polarity):  # Phi has total grid 
   
   for i in xrange(1,Phi.size-1):
     diag_construct[i-1] = -(conc_factor(Diff[i+1],Phi[i],Phi[i+1],type) + conc_factor(Diff[i],Phi[i],Phi[i-1],type))
-    #R[i-1] = rad_recom(n_conc[i],p_conc[i])  #TODO: figure out a faster way to do recombination calc
+    #R[i-1] = rad_recom(n_conc[i],p_conc[i]) # TODO: figure out a faster way to do recombination calc
     rhs[i-1] = (R[i-1] - G[i-1])*del_x_2
   for i in xrange(1,Phi.size-2):
     udiag_construct[i-1] = conc_factor(Diff[i+1],Phi[i+1],Phi[i],type)
@@ -233,7 +233,7 @@ def carrier_conc_from_continuity(Phi,Diff,type,polarity):  # Phi has total grid 
   return n_or_p
 
 
-def big_func(Phi): # The big linear algebra setup function, phi has (grid points - 2)
+def big_func(Phi): # The big linear algebra setup function, phi has (grid points - 2)  TODO: This is a stub for the quasi-fermi level n and p backend
 
   rhs = np.zeros(Phi.size) # only interior grid points needed here
 
@@ -255,7 +255,7 @@ def big_func(Phi): # The big linear algebra setup function, phi has (grid points
   
   return fdm_mat * Phi - rhs
 
-def big_func2(Phi): # The big linear algebra setup function, phi has (grid points - 2)
+def big_func2(Phi): # The big linear algebra setup function, phi has (grid points - 2) NOTE: Currently the only working n and p backend. Finds actual n and p
 
   rhs = np.zeros(Phi.size) # only interior grid points needed here
   
@@ -284,13 +284,13 @@ def big_func2(Phi): # The big linear algebra setup function, phi has (grid point
   return fdm_mat * Phi - rhs
 
 
-def calc_current(polarity):  # returns in units of mA/cm^2  TODO: polarity broken
+def calc_current(polarity):  # returns in units of mA/cm^2  TODO: polarity broken TODO: Figure out a better way to handle units, unit conversions should be performed at some later time, not here
   Jn = D_n * (Bernoulli((potentials[potentials.size-3] - potentials[potentials.size-2])/(k_B*T)) * n_conc[n_conc.size-3] - Bernoulli((potentials[potentials.size-2] - potentials[potentials.size-3])/(k_B*T)) * n_conc[n_conc.size-2]) / del_x
   Jp = D_p * (Bernoulli((potentials[potentials.size-2] - potentials[potentials.size-3])/(k_B*T)) * p_conc[p_conc.size-3] - Bernoulli((potentials[potentials.size-3] - potentials[potentials.size-2])/(k_B*T)) * p_conc[p_conc.size-2]) / del_x
   #Jn = D_n * (Bernoulli((potentials[1] - potentials[2])/(k_B*T)) * n_conc[1] - Bernoulli((potentials[2] - potentials[1])/(k_B*T)) * n_conc[2]) / del_x
   #Jp = D_p * (Bernoulli((potentials[2] - potentials[1])/(k_B*T)) * p_conc[1] - Bernoulli((potentials[1] - potentials[2])/(k_B*T)) * p_conc[2]) / del_x
   return (Jn - 0) * sc.e / (time_eV_factor * meter_eV_factor * meter_eV_factor * 10)
-  #return (Jn - 0)
+  #return (Jn - 0) # TODO: EQE uses internal units, not SI
 
 
 ## End Functions ##
@@ -307,16 +307,16 @@ P_in = I_0# * E_g
 
 ref_I0 = 1037 * meter_eV_factor * meter_eV_factor * time_eV_factor / sc.e  # max photon flux possible for reference (from pv site)
 
-print ref_I0
+#print ref_I0
 
 
 G = np.zeros(grid_pnts-2)
 for i in xrange(G.size):
-  G[i] = (beers_decay(del_x*(i)) - beers_decay(del_x*(i+1)))/del_x  # TODO: simplify this expression (this is divergence of photon flux)
-G = G*I_0# Units should be photons/s*m^2 equivalent   TODO:  Also look into whether or not this should be evaluated on grid half-points
+  G[i] = (beers_decay(del_x*(i)) - beers_decay(del_x*(i+1)))/del_x # TODO: simplify this expression (this is divergence of photon flux) TODO: Also look into whether or not this should be evaluated on grid half-points
+G = G*I_0# Units should be photons/s*m^2 equivalent   
 #G = np.zeros(grid_pnts-2)
-print G
-print np.sum(G)
+#print G
+#print np.sum(G)
 
 
 # Build guess vectors
@@ -324,7 +324,9 @@ phi_guess = np.zeros(grid_pnts - 2)
 diffusivity = np.zeros(grid_pnts)
 potentials = np.zeros(grid_pnts) # Create an array of potentials, one for each grid point
 
-voltages =  np.linspace(0.0,1.1,21)
+voltages1 =  np.linspace(0.0,0.7,10) # low density points
+voltages2 =  np.linspace(0.7,1.0,20) # high density points
+voltages =  np.concatenate((voltages1,voltages2)) # all points
 currents = list()
 for V_applied in voltages:
 
@@ -346,10 +348,12 @@ for V_applied in voltages:
   
 
   currents.append(calc_current(1))
-  Eqe = calc_current(1) / P_in
-  print Eqe
-  print calc_current(1)
-  print V_applied
+  #Eqe = calc_current(1) / P_in # TODO: Implement working EQE loop
+  #print Eqe
+  buf = "Current (mA/cm^2): %f\nVoltage (V): %f" % (calc_current(1),V_applied)
+  print buf
+  #print calc_current(1)
+  #print V_applied
   #print current
 
 rho = np.zeros(grid_pnts,dtype=np.float128)
@@ -372,7 +376,7 @@ plt.show()
 
 plt.plot(distances, n_conc / (1E6 * meter_eV_factor**3), '-', c = 'r')
 plt.plot(distances, p_conc / (1E6 * meter_eV_factor**3), '-', c = 'b')
-plt.plot(distances, rho, '-', c = 'g')
+#plt.plot(distances, rho, '-', c = 'g')
 plt.xlabel(r'Distance ($\mu$m)')
 plt.ylabel('Concentration (cm^-3)')
 plt.yscale('log')
