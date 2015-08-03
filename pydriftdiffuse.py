@@ -30,20 +30,21 @@ chi = 4.07 # eV # GaAs electron affinity
 
 N_c = 4.7E+23 # 1/m^3 # GaAs effective conduction band density of states
 N_v = 9.0E+24 # 1/m^3 # GaAs effective valence band density of states
-N_a = 1.0E+22 # 1/m^3 # doping in p-type
-N_d = 1.0E+22 # 1/m^3 # doping in n-type
+N_a = 1.0E+24 # 1/m^3 # doping in p-type
+N_d = 2.0E+23 # 1/m^3 # doping in n-type
 n_i = 2.498E+12 # 1/m^3
 
+mu_p = 0.04 # m^2/V-s
 mu_n = 0.85 # m^2/V-s
-mu_p = 0.85#0.04 # m^2/V-s
 
-p_type_width = 2E-06 # m
+tao_p = 3.0E-12 # s # lifetime of holes in n-type GaAs
+tao_n = 5.0E-15 # s # lifetime of electrons in p-type GaAs
+rad_coeff = 7.2E-16 # m^3/s
+
+p_type_width = 2E-07 # m
 n_type_width = 2E-06 # m
 
-G = 0
-R = 0
-
-V_applied = 0.938 # V # Applied bias
+abs_coeff = 15000 # 1/cm
 
 
 ## Mode Settings ## 
@@ -75,6 +76,9 @@ def meter_conc_to_eV_conc(concentration):
 def meter_to_eV(distance):
   return distance / meter_eV_factor
 
+def second_to_eV(time):
+  return time / time_eV_factor
+
 def mobility_to_eV(mobility):
   return mobility * time_eV_factor / (meter_eV_factor**2)
 
@@ -87,8 +91,12 @@ def pnts_in_type(width,grid_distance):
 def bose_einstein(E,T,qV):
   return 1 / (math.exp((E-qV)/(k_B*T)) - 1)
 
-def planck_rad_func(E,T,qV):
-  return E**3 * bose_einstein(E,T,qV)
+def spectral_photon_flux(E,T,qV):
+  return E**2 * bose_einstein(E,T,qV)
+
+def beers_decay(depth):
+  return math.exp(-abs_coeff_eV*depth)
+
 
 
 ## Material Calculations ##
@@ -100,8 +108,12 @@ N_d_eV = meter_conc_to_eV_conc(N_d) # could use some arbitrary units but this is
 n_i_eV = meter_conc_to_eV_conc(n_i)
 
 
-mu_p_eV = mobility_to_eV(mu_p) # 
+mu_p_eV = mobility_to_eV(mu_p)
 mu_n_eV = mobility_to_eV(mu_n)
+
+tao_p_eV = second_to_eV(tao_p)
+tao_n_eV = second_to_eV(tao_n)
+rad_coeff_eV = rad_coeff * time_eV_factor / (meter_eV_factor**3) 
 
 D_p = diffusion_coeff(mu_p_eV)
 D_n = diffusion_coeff(mu_n_eV)
@@ -119,18 +131,22 @@ p_conc = np.zeros(grid_pnts)
 
 E_i = 0.5 * (E_g + k_B*T*math.log(N_c/N_v))
 
+abs_coeff_eV = abs_coeff * 100 * meter_eV_factor
+
 flux_const = 2 / (h_eV**3 * c_eV**2)
 
 sun_geo_factor = math.pi * math.sin(math.radians(subtend_angle_degrees)) ** 2
 
-## Integrate to find the power from the sun ##
-I_0, I_err = integrate.quad(planck_rad_func,E_g,10,args=(T_s,0)) # Integrate the planck radiation function from 0 eV to 10 eV (~inf)
-I_0 = I_0 * flux_const * sun_geo_factor * suns_factor
-
-G = I_0 # Units should be W/m^2 equivalent
 
 
 ## Functions that use material calculations ##
+def nonrad_recom(n,p):
+  return (n*p - (n_i_eV**2))/(tao_p_eV*(n+n_i_eV) + tao_n_eV*(p+n_i_eV))
+
+def rad_recom(n,p):
+  return rad_coeff_eV * (n*p - (n_i_eV**2))
+
+
 def carrier_conc_from_phi(Phi): # pass negative phi for p-type material
   return n_i_eV * math.exp(q*Phi/(k_B*T))
 
@@ -163,9 +179,13 @@ def Bernoulli(x):
     return x / np.expm1(x)
 
 
-def conc_factor(Diff,Phi1,Phi2,type):
+def conc_factor(Diff,Phi1,Phi2,type):  #TODO: diffusion matrix not implemented yet
   mod = type_modifier(type)
-  return Diff*Bernoulli(mod*(Phi1 - Phi2)/(k_B*T))
+  if type:
+    return D_p*Bernoulli(mod*(Phi1 - Phi2)/(k_B*T))
+  else:
+    return D_n*Bernoulli(mod*(Phi1 - Phi2)/(k_B*T))
+  #return Diff*Bernoulli(mod*(Phi1 - Phi2)/(k_B*T))
 
 
 def carrier_conc_from_continuity(Phi,Diff,type,polarity):  # Phi has total grid points, polarity is 1 for p-type at 0, 0 for n-type at 0 ... typedef?
@@ -174,27 +194,20 @@ def carrier_conc_from_continuity(Phi,Diff,type,polarity):  # Phi has total grid 
   udiag_construct = np.zeros(Phi.size-3)
   ldiag_construct = np.zeros(Phi.size-3)
 
-  # For now set Generation = 0 and Recombination = 0
+  # rhs will contain G and R terms
   rhs = np.zeros(Phi.size-2)
+  R = np.zeros(Phi.size-2)
   
   for i in xrange(1,Phi.size-1):
     diag_construct[i-1] = -(conc_factor(Diff[i+1],Phi[i],Phi[i+1],type) + conc_factor(Diff[i],Phi[i],Phi[i-1],type))
-    #print i
-    #print diag_construct[i-1]
-    #print Phi[i]
-    rhs[i-1] = (R - G)*del_x_2
+    #R[i-1] = rad_recom(n_conc[i],p_conc[i])  #TODO: figure out a faster way to do recombination calc
+    rhs[i-1] = (R[i-1] - G[i-1])*del_x_2
   for i in xrange(1,Phi.size-2):
     udiag_construct[i-1] = conc_factor(Diff[i+1],Phi[i+1],Phi[i],type)
     ldiag_construct[i-1] = conc_factor(Diff[i+1],Phi[i],Phi[i+1],type)  # This diagonal actually starts on line 2, so values are plussed 1
-    
-
   
   conc_mat = sparse.diags([diag_construct, udiag_construct, ldiag_construct], [0, 1, -1], shape=(Phi.size-2, Phi.size-2), format="csc")
-
-  #print diag_construct
-  #print udiag_construct
-  #print ldiag_construct
-  #print conc_mat
+  #print R
   
   # Incorporate boundary conditions
   if polarity: # is true (p-type at 0)
@@ -254,16 +267,8 @@ def big_func2(Phi): # The big linear algebra setup function, phi has (grid point
   p_conc = carrier_conc_from_continuity(newPot,diffusivity,1,1)
   n_conc = carrier_conc_from_continuity(newPot,diffusivity,0,1)
 
-  # Take note of junction polarity and assign charge densities for each grid point
+  # Take note of junction polarity and assign charge densities for each grid point  TODO: polarity broken
   for i in xrange(rhs.size):
-    #p_eV = carrier_conc_from_phi(-Phi[i])
-    #n_eV = carrier_conc_from_phi(Phi[i])
-    #print p_eV
-    #print n_eV
-    #p_eV = carrier_conc_from_phi2(Phi[i],p_conc[i+1],1)
-    #n_eV = carrier_conc_from_phi2(Phi[i],n_conc[i+1],0)
-    #print p_eV
-    #print n_eV
     if i < (pnts_in_p-1):
       rho = -q * (p_conc[i+1] - n_conc[i+1] - N_a_eV) # charge density in p-type
     else:
@@ -278,9 +283,14 @@ def big_func2(Phi): # The big linear algebra setup function, phi has (grid point
   
   return fdm_mat * Phi - rhs
 
-def calc_current(polarity):  # returns in units of mA/cm^2
-  J = diffusivity[diffusivity.size-1] * (Bernoulli((potentials[potentials.size-2] - potentials[potentials.size-1])/(k_B*T)) * n_conc[p_conc.size-2] - Bernoulli((potentials[potentials.size-1] - potentials[potentials.size-2])/(k_B*T)) * n_conc[p_conc.size-1]) / del_x
-  return J * sc.e / (time_eV_factor * meter_eV_factor * meter_eV_factor * 10)
+
+def calc_current(polarity):  # returns in units of mA/cm^2  TODO: polarity broken
+  Jn = D_n * (Bernoulli((potentials[potentials.size-3] - potentials[potentials.size-2])/(k_B*T)) * n_conc[n_conc.size-3] - Bernoulli((potentials[potentials.size-2] - potentials[potentials.size-3])/(k_B*T)) * n_conc[n_conc.size-2]) / del_x
+  Jp = D_p * (Bernoulli((potentials[potentials.size-2] - potentials[potentials.size-3])/(k_B*T)) * p_conc[p_conc.size-3] - Bernoulli((potentials[potentials.size-3] - potentials[potentials.size-2])/(k_B*T)) * p_conc[p_conc.size-2]) / del_x
+  #Jn = D_n * (Bernoulli((potentials[1] - potentials[2])/(k_B*T)) * n_conc[1] - Bernoulli((potentials[2] - potentials[1])/(k_B*T)) * n_conc[2]) / del_x
+  #Jp = D_p * (Bernoulli((potentials[2] - potentials[1])/(k_B*T)) * p_conc[1] - Bernoulli((potentials[1] - potentials[2])/(k_B*T)) * p_conc[2]) / del_x
+  return (Jn - 0) * sc.e / (time_eV_factor * meter_eV_factor * meter_eV_factor * 10)
+  #return (Jn - 0)
 
 
 ## End Functions ##
@@ -289,44 +299,68 @@ def calc_current(polarity):  # returns in units of mA/cm^2
  
 #### MAIN ####
 
+## Integrate to find the photon flux from the sun ##
+I_0, I_err = integrate.quad(spectral_photon_flux,E_g,10,args=(T_s,0)) # Integrate the planck radiation function from 0 eV to 10 eV (~inf)
+I_0 = I_0 * flux_const * sun_geo_factor * suns_factor
+
+P_in = I_0# * E_g
+
+ref_I0 = 1037 * meter_eV_factor * meter_eV_factor * time_eV_factor / sc.e  # max photon flux possible for reference (from pv site)
+
+print ref_I0
+
+
+G = np.zeros(grid_pnts-2)
+for i in xrange(G.size):
+  G[i] = (beers_decay(del_x*(i)) - beers_decay(del_x*(i+1)))/del_x  # TODO: simplify this expression (this is divergence of photon flux)
+G = G*I_0# Units should be photons/s*m^2 equivalent   TODO:  Also look into whether or not this should be evaluated on grid half-points
+#G = np.zeros(grid_pnts-2)
+print G
+print np.sum(G)
+
+
 # Build guess vectors
 phi_guess = np.zeros(grid_pnts - 2)
 diffusivity = np.zeros(grid_pnts)
 potentials = np.zeros(grid_pnts) # Create an array of potentials, one for each grid point
 
-voltages =  np.linspace(0.0,1.0,21)
+voltages =  np.linspace(0.0,1.1,21)
 currents = list()
 for V_applied in voltages:
 
   for i in xrange(phi_guess.size):
     if i < (pnts_in_p-1):
       phi_guess[i] = V_bi_p + V_applied # charge density in p-type
-      diffusivity[i+1] = D_p
     else:
       phi_guess[i] = V_bi_n # charge density in n-type
-      diffusivity[i+1] = D_n
-  diffusivity[0] = D_p
-  diffusivity[diffusivity.size-1] = D_n
-
-
 
   potentials[0] = V_bi_p + V_applied # insert known boundary potentials
   potentials[potentials.size-1] = V_bi_n
 
   potentials[1:potentials.size-1:1] = phi_guess
 
-  potentials[1:potentials.size-1:1] = optimize.newton_krylov(big_func2,potentials[1:potentials.size-1:1],verbose=1,iter=10) # Trick because numpy can't append arrays without copying them
+  potentials[1:potentials.size-1:1] = optimize.newton_krylov(big_func2,potentials[1:potentials.size-1:1],verbose=1,iter=9) # Trick because numpy can't append arrays without copying them
 
   p_conc = carrier_conc_from_continuity(potentials,diffusivity,1,1)
   n_conc = carrier_conc_from_continuity(potentials,diffusivity,0,1)
+  
 
   currents.append(calc_current(1))
+  Eqe = calc_current(1) / P_in
+  print Eqe
+  print calc_current(1)
   print V_applied
   #print current
 
-npcurrents = np.asarray(currents)
+rho = np.zeros(grid_pnts,dtype=np.float128)
+for i in xrange(phi_guess.size):
+    if i < (pnts_in_p-1):
+      rho[i+1] = -np.float128(q) * (np.float128(p_conc[i+1]) - np.float128(n_conc[i+1]) - np.float128(N_a_eV)) # charge density in p-type
+    else:
+      rho[i+1] = -np.float128(q) * (np.float128(p_conc[i+1]) - np.float128(n_conc[i+1]) + np.float128(N_d_eV)) # charge density in n-type
+
+      
 print currents
-print npcurrents
 print voltages
 # Setup plot #
 distances = np.linspace(0,cell_width_eV*1E6*meter_eV_factor,num=grid_pnts)
@@ -336,14 +370,22 @@ plt.xlabel(r'Distance ($\mu$m)')
 plt.ylabel('Potential (V)')
 plt.show()
 
-plt.plot(distances, n_conc, '-', c = 'r')
-plt.plot(distances, p_conc, '-', c = 'b')
+plt.plot(distances, n_conc / (1E6 * meter_eV_factor**3), '-', c = 'r')
+plt.plot(distances, p_conc / (1E6 * meter_eV_factor**3), '-', c = 'b')
+plt.plot(distances, rho, '-', c = 'g')
 plt.xlabel(r'Distance ($\mu$m)')
-plt.ylabel('Concentration (density)')
+plt.ylabel('Concentration (cm^-3)')
 plt.yscale('log')
 plt.show()
 
-plt.plot(voltages, npcurrents, '-', c = 'r')
+plt.plot(distances[1:potentials.size-1:1], G / (1E6 * time_eV_factor * meter_eV_factor**3), '-', c = 'b')
+plt.xlabel(r'Distance ($\mu$m)')
+plt.ylabel('Concentration (cm^-3)')
+plt.yscale('log')
+plt.show()
+
+plt.plot(voltages, currents, '-', c = 'r')
 plt.xlabel('Voltage (V)')
 plt.ylabel(r'Current Density (mA/cm$^2$)')
+plt.ylim([0,40])
 plt.show()
